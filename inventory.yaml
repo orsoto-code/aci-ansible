@@ -1,0 +1,8 @@
+all:
+  hosts:
+    apic01:
+      ansible_host: 10.10.10.100  # IP de tu APIC
+      ansible_user: admin
+      ansible_password: YourPassword123
+      ansible_connection: local    # Crucial: La lógica corre localmente hacia la API
+      ansible_python_interpreter: /usr/local/bin/python

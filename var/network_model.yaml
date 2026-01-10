@@ -1,0 +1,79 @@
+---
+aci_infrastructure:
+  tenants:
+    # --- TENANT DE PRODUCCIÓN ---
+    - name: "PRODUCTION_T"
+      description: "Tenant para servicios criticos de produccion"
+
+      vrfs:
+        - name: "PROD_VRF"
+
+      bds:
+        - name: "PROD_BD_APP"
+          vrf: "PROD_VRF"
+          l2_unknown_unicast: "proxy"  # Hardware Proxy (Recomendado)
+          unicast_routing: "yes"       # Habilita IP Gateway
+          arp_flood: "no"              # ARP Suppression activo
+          subnets:
+            - gateway: "10.1.1.1/24"
+              scope: "public"          # Permite anuncio vía L3Out
+            - gateway: "10.1.2.1/24"
+              scope: "private"
+
+      app_profiles:
+        - name: "ERP_APP_PR"
+          epgs:
+            - name: "WEB_EPG"
+              bd: "PROD_BD_APP"
+              # 1. Asociacion a Dominios
+              domains:
+                - name: "PHYS_DOM_ALL"
+                  type: "phys"
+                - name: "VMWARE_VMM_DOM"
+                  type: "vmm"
+              # 2. Caminos Estaticos (Puertos Fisicos)
+              static_paths:
+                - pod: 1
+                  leaf: 101
+                  port: "eth1/10"       # Puerto individual (Access)
+                  vlan: 100
+                  mode: "regular"      # Trunk
+                - pod: 1
+                  leaf: 102
+                  port_channel: "PC_STORAGE_01" # Port-Channel
+                  vlan: 101
+                  mode: "regular"
+                - pod: 1
+                  leaf: "103-104"      # Par de Leaf para vPC
+                  vpc: "vPC_ESX_CLUSTER_01"     # vPC
+                  vlan: 102
+                  mode: "regular"
+
+    # --- TENANT DE DESARROLLO ---
+    - name: "DEVELOPMENT_T"
+      description: "Tenant para entornos de laboratorio y dev"
+      vrfs:
+        - name: "DEV_VRF"
+      bds:
+        - name: "DEV_BD_LAN"
+          vrf: "DEV_VRF"
+          l2_unknown_unicast: "flood"
+          unicast_routing: "yes"
+          arp_flood: "yes"
+          subnets:
+            - gateway: "192.168.10.1/24"
+              scope: "private"
+      app_profiles:
+        - name: "DEV_APP_PR"
+          epgs:
+            - name: "LAB_EPG"
+              bd: "DEV_BD_LAN"
+              domains:
+                - name: "LAB_PHYS_DOM"
+                  type: "phys"
+              static_paths:
+                - pod: 1
+                  leaf: 105
+                  port: "eth1/48"
+                  vlan: 200
+                  mode: "untagged"     # Puerto de acceso (Native)

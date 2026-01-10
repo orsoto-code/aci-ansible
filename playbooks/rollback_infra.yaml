@@ -1,0 +1,40 @@
+---
+- name: "Rollback Integral de Infraestructura Cisco ACI"
+  hosts: apic01
+  gather_facts: no
+  vars_files:
+    - "../vars/network_model.yaml"
+
+  tasks:
+    - name: "Eliminar Static Paths de los EPGs"
+      cisco.aci.aci_epg_to_static_path:
+        hostname: "{{ ansible_host }}"
+        username: "{{ ansible_user }}"
+        password: "{{ ansible_password }}"
+        validate_certs: no
+        tenant: "{{ item.tenant }}"
+        ap: "{{ item.ap }}"
+        epg: "{{ item.epg }}"
+        leafs: "{{ item.leaf }}"
+        interface: "{{ item.port | default(omit) }}"
+        path: "{{ item.vpc if item.vpc is defined else (item.port_channel if item.port_channel is defined else omit) }}"
+        state: absent # <-- CAMBIO CLAVE
+      loop: >
+        {% set path_list = [] %}
+        {% for t in aci_infrastructure.tenants %}{% for ap in t.app_profiles %}{% for epg in ap.epgs %}
+          {% if epg.static_paths is defined %}{% for sp in epg.static_paths %}
+            {% set _ = path_list.append({'tenant': t.name, 'ap': ap.name, 'epg': epg.name, 'leaf': sp.leaf, 
+              'port': sp.port | default(none), 'port_channel': sp.port_channel | default(none), 'vpc': sp.vpc | default(none)}) %}
+          {% endfor %}{% endif %}
+        {% endfor %}{% endfor %}{% endfor %}
+        {{ path_list }}
+
+    - name: "Eliminar Tenants (Borrado en Cascada)"
+      cisco.aci.aci_tenant:
+        hostname: "{{ ansible_host }}"
+        username: "{{ ansible_user }}"
+        password: "{{ ansible_password }}"
+        validate_certs: no
+        tenant: "{{ item.name }}"
+        state: absent # <-- Esto borra todo lo que esté dentro del Tenant
+      loop: "{{ aci_infrastructure.tenants }}"

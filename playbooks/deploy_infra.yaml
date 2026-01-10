@@ -1,0 +1,162 @@
+---
+- name: "Despliegue Integral de Infraestructura Cisco ACI"
+  hosts: apic01
+  gather_facts: no
+  vars_files:
+    - "../vars/network_model.yaml"
+
+  tasks:
+    - name: "Configurar Tenants"
+      cisco.aci.aci_tenant:
+        hostname: "{{ ansible_host }}"
+        username: "{{ ansible_user }}"
+        password: "{{ ansible_password }}"
+        validate_certs: no
+        tenant: "{{ item.name }}"
+        description: "{{ item.description | default(omit) }}"
+        state: present
+      loop: "{{ aci_infrastructure.tenants }}"
+
+    - name: "Configurar VRFs"
+      cisco.aci.aci_vrf:
+        hostname: "{{ ansible_host }}"
+        username: "{{ ansible_user }}"
+        password: "{{ ansible_password }}"
+        validate_certs: no
+        tenant: "{{ item.0.name }}"
+        vrf: "{{ item.1.name }}"
+        state: present
+      loop: "{{ aci_infrastructure.tenants | subelements('vrfs') }}"
+
+    - name: "Configurar Bridge Domains (L2/L3 Policy)"
+      cisco.aci.aci_bd:
+        hostname: "{{ ansible_host }}"
+        username: "{{ ansible_user }}"
+        password: "{{ ansible_password }}"
+        validate_certs: no
+        tenant: "{{ item.0.name }}"
+        bd: "{{ item.1.name }}"
+        vrf: "{{ item.1.vrf }}"
+        l2_unknown_unicast: "{{ item.1.l2_unknown_unicast | default('proxy') }}"
+        unicast_routing: "{{ item.1.unicast_routing | default('yes') }}"
+        arp_flood: "{{ item.1.arp_flood | default('no') }}"
+        state: present
+      loop: "{{ aci_infrastructure.tenants | subelements('bds') }}"
+
+    - name: "Configurar Subnets en los BDs"
+      cisco.aci.aci_bd_subnet:
+        hostname: "{{ ansible_host }}"
+        username: "{{ ansible_user }}"
+        password: "{{ ansible_password }}"
+        validate_certs: no
+        tenant: "{{ item.0.name }}"
+        bd: "{{ item.1.name }}"
+        gateway: "{{ item.2.gateway }}"
+        scope: "{{ item.2.scope | default('private') }}"
+        state: present
+      loop: >
+        {% set subnet_list = [] %}
+        {% for tenant in aci_infrastructure.tenants %}
+          {% for bd in tenant.bds %}
+            {% for subnet in bd.subnets %}
+              {% set _ = subnet_list.append([tenant, bd, subnet]) %}
+            {% endfor %}
+          {% endfor %}
+        {% endfor %}
+        {{ subnet_list }}
+
+    - name: "Configurar Application Profiles"
+      cisco.aci.aci_ap:
+        hostname: "{{ ansible_host }}"
+        username: "{{ ansible_user }}"
+        password: "{{ ansible_password }}"
+        validate_certs: no
+        tenant: "{{ item.0.name }}"
+        ap: "{{ item.1.name }}"
+        state: present
+      loop: "{{ aci_infrastructure.tenants | subelements('app_profiles') }}"
+
+    - name: "Configurar EPGs"
+      cisco.aci.aci_epg:
+        hostname: "{{ ansible_host }}"
+        username: "{{ ansible_user }}"
+        password: "{{ ansible_password }}"
+        validate_certs: no
+        tenant: "{{ item.0.tenant }}"
+        ap: "{{ item.0.ap }}"
+        epg: "{{ item.1.name }}"
+        bd: "{{ item.1.bd }}"
+        state: present
+      loop: >
+        {% set epg_list = [] %}
+        {% for tenant in aci_infrastructure.tenants %}
+          {% for ap in tenant.app_profiles %}
+            {% for epg in ap.epgs %}
+              {% set _ = epg_list.append([{'tenant': tenant.name, 'ap': ap.name}, epg]) %}
+            {% endfor %}
+          {% endfor %}
+        {% endfor %}
+        {{ epg_list }}
+
+    - name: "Asociar EPGs a Dominios"
+      cisco.aci.aci_epg_to_domain:
+        hostname: "{{ ansible_host }}"
+        username: "{{ ansible_user }}"
+        password: "{{ ansible_password }}"
+        validate_certs: no
+        tenant: "{{ item.tenant }}"
+        ap: "{{ item.ap }}"
+        epg: "{{ item.epg }}"
+        domain: "{{ item.domain_name }}"
+        domain_type: "{{ item.domain_type }}"
+        state: present
+      loop: >
+        {% set dom_list = [] %}
+        {% for t in aci_infrastructure.tenants %}
+          {% for ap in t.app_profiles %}
+            {% for epg in ap.epgs %}
+              {% for dom in epg.domains %}
+                {% set _ = dom_list.append({'tenant': t.name, 'ap': ap.name, 'epg': epg.name, 'domain_name': dom.name, 'domain_type': dom.type}) %}
+              {% endfor %}
+            {% endfor %}
+          {% endfor %}
+        {% endfor %}
+        {{ dom_list }}
+
+    - name: "Configurar Static Paths (Port, PC, vPC)"
+      cisco.aci.aci_epg_to_static_path:
+        hostname: "{{ ansible_host }}"
+        username: "{{ ansible_user }}"
+        password: "{{ ansible_password }}"
+        validate_certs: no
+        tenant: "{{ item.tenant }}"
+        ap: "{{ item.ap }}"
+        epg: "{{ item.epg }}"
+        pod_id: "{{ item.pod | default(1) }}"
+        leafs: "{{ item.leaf }}"
+        interface_mode: "{{ item.mode | default('regular') }}"
+        encapsulation_id: "{{ item.vlan }}"
+        deploy_immediacy: "immediate"
+        # Lógica para determinar el tipo de interfaz y el path
+        interface_type: "{{ 'vpc' if item.vpc is defined else ('port-channel' if item.port_channel is defined else 'switch-port') }}"
+        interface: "{{ item.port if item.port is defined else omit }}"
+        path: "{{ item.vpc if item.vpc is defined else (item.port_channel if item.port_channel is defined else omit) }}"
+        state: present
+      loop: >
+        {% set path_list = [] %}
+        {% for t in aci_infrastructure.tenants %}
+          {% for ap in t.app_profiles %}
+            {% for epg in ap.epgs %}
+              {% if epg.static_paths is defined %}
+                {% for sp in epg.static_paths %}
+                  {% set _ = path_list.append({
+                    'tenant': t.name, 'ap': ap.name, 'epg': epg.name, 
+                    'pod': sp.pod, 'leaf': sp.leaf, 'vlan': sp.vlan, 'mode': sp.mode,
+                    'port': sp.port | default(none), 'port_channel': sp.port_channel | default(none), 'vpc': sp.vpc | default(none)
+                  }) %}
+                {% endfor %}
+              {% endif %}
+            {% endfor %}
+          {% endfor %}
+        {% endfor %}
+        {{ path_list }}
