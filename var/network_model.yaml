@@ -6,7 +6,7 @@ aci_infrastructure:
       description: "Tenant para servicios criticos de produccion"
 
       vrfs:
-        - name: "PROD_VRF"
+        - name: "PROD-1_VRF"
 
       bds:
         - name: "PROD_BD_APP"
