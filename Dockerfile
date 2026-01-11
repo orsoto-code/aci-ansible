@@ -1,17 +1,15 @@
 FROM python:3.11-slim
 
-ENV PYTHONDONTWRITEBYTECODE=1
-ENV PYTHONUNBUFFERED=1
-
-# Dependencias básicas
+# Instalamos dependencias del sistema necesarias
 RUN apt-get update && apt-get install -y \
-    curl \
+    gcc \
+    python3-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Librerías de Python para ACI
+# Instalamos Ansible y las librerías que requiere la API de ACI
 RUN pip install --no-cache-dir ansible requests urllib3 jmespath
 
-# Colección oficial de Cisco ACI
+# Instalamos la colección de Cisco ACI desde Ansible Galaxy
 RUN ansible-galaxy collection install cisco.aci
 
 WORKDIR /ansible

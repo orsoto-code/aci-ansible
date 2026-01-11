@@ -3,7 +3,7 @@
   hosts: apic01
   gather_facts: no
   vars_files:
-    - "../vars/network_model.yaml"
+    - "/ansible/var/network_model.yaml"
 
   tasks:
     - name: "Configurar Tenants"
@@ -16,6 +16,7 @@
         description: "{{ item.description | default(omit) }}"
         state: present
       loop: "{{ aci_infrastructure.tenants }}"
+      delegate_to: localhost
 
     - name: "Configurar VRFs"
       cisco.aci.aci_vrf:
@@ -124,23 +125,26 @@
         {{ dom_list }}
 
     - name: "Configurar Static Paths (Port, PC, vPC)"
-      cisco.aci.aci_epg_to_static_path:
-        hostname: "{{ ansible_host }}"
+      cisco.aci.aci_static_binding_to_epg:
+        host: "{{ ansible_host }}"
         username: "{{ ansible_user }}"
         password: "{{ ansible_password }}"
         validate_certs: no
+
         tenant: "{{ item.tenant }}"
         ap: "{{ item.ap }}"
         epg: "{{ item.epg }}"
         pod_id: "{{ item.pod | default(1) }}"
-        leafs: "{{ item.leaf }}"
+
+        # - vpc: lista de leafs
+        # - switch_port/port_channel: un leaf (string/int) suele bastar
+        leafs: "{{ item.leafs }}"
+
+        interface_type: "{{ item.interface_type }}"
+        interface: "{{ item.interface }}"
         interface_mode: "{{ item.mode | default('regular') }}"
-        encapsulation_id: "{{ item.vlan }}"
+        encap_id: "{{ item.vlan }}"
         deploy_immediacy: "immediate"
-        # Lógica para determinar el tipo de interfaz y el path
-        interface_type: "{{ 'vpc' if item.vpc is defined else ('port-channel' if item.port_channel is defined else 'switch-port') }}"
-        interface: "{{ item.port if item.port is defined else omit }}"
-        path: "{{ item.vpc if item.vpc is defined else (item.port_channel if item.port_channel is defined else omit) }}"
         state: present
       loop: >
         {% set path_list = [] %}
@@ -149,10 +153,37 @@
             {% for epg in ap.epgs %}
               {% if epg.static_paths is defined %}
                 {% for sp in epg.static_paths %}
+
+                  {# 1) Determinar interface_type #}
+                  {% set itype = 'vpc' if sp.vpc is defined else ('port_channel' if sp.port_channel is defined else 'switch_port') %}
+
+                  {# 2) Determinar interface #}
+                  {% if itype == 'switch_port' %}
+                    {# Normaliza "eth1/10" -> "1/10" si viene así #}
+                    {% set iface = (sp.port | string) | regex_replace('^eth', '') %}
+                  {% elif itype == 'port_channel' %}
+                    {% set iface = sp.port_channel %}
+                  {% else %}
+                    {% set iface = sp.vpc %}
+                  {% endif %}
+
+                  {# 3) Determinar leafs: si vPC debe ser lista; si no, un leaf #}
+                  {% if itype == 'vpc' %}
+                    {% set leafs_val = sp.leafs if sp.leafs is defined else sp.leaf %}
+                  {% else %}
+                    {% set leafs_val = sp.leafs if sp.leafs is defined else sp.leaf %}
+                  {% endif %}
+
                   {% set _ = path_list.append({
-                    'tenant': t.name, 'ap': ap.name, 'epg': epg.name, 
-                    'pod': sp.pod, 'leaf': sp.leaf, 'vlan': sp.vlan, 'mode': sp.mode,
-                    'port': sp.port | default(none), 'port_channel': sp.port_channel | default(none), 'vpc': sp.vpc | default(none)
+                    'tenant': t.name,
+                    'ap': ap.name,
+                    'epg': epg.name,
+                    'pod': sp.pod | default(1),
+                    'leafs': leafs_val,
+                    'vlan': sp.vlan,
+                    'mode': sp.mode | default('regular'),
+                    'interface_type': itype,
+                    'interface': iface
                   }) %}
                 {% endfor %}
               {% endif %}
@@ -160,3 +191,4 @@
           {% endfor %}
         {% endfor %}
         {{ path_list }}
+      delegate_to: localhost

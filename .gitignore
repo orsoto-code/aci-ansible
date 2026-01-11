@@ -1,0 +1,12 @@
+# Archivos de Ansible
+*.retry
+*.pyc
+.ansible/
+secrets.yml
+
+# Archivos de Docker
+.docker/
+
+# Archivos de sistema
+.DS_Store
+Thumbs.db
